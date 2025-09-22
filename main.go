@@ -156,14 +156,15 @@ func main() {
 		var newAssetID string
 		if savedPath != "" {
 			createReq := contentful.CreateAssetRequest{
-				Asset:       asset,
-				SpaceID:     *spaceID,
-				Environment: *environment,
-				Locale:      "en-US",
-				FilePath:    savedPath,
-				HeaderName:  *headerName,
-				Scheme:      *scheme,
-				Token:       *token,
+				Asset:             asset,
+				SpaceID:           *spaceID,
+				Environment:       *environment,
+				Locale:            "en-US",
+				FilePath:          savedPath,
+				HeaderName:        *headerName,
+				Scheme:            *scheme,
+				Token:             *token,
+				OriginalCreatedAt: asset.CreatedAt,
 			}
 			if nid, _, cerr := contentful.CreateAndPublishAssetFromFile(ctx, client, createReq); cerr != nil {
 				warnf("row %d: create new asset from file: %v", rowNum, cerr)
