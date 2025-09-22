@@ -103,14 +103,30 @@ func main() {
 
 		// First, fetch the entry and asset to get their information including versions
 
-		entry, entryStatus, err := contentful.FetchEntry(ctx, client, *spaceID, *environment, entryID, *headerName, *scheme, *token)
+		fetchEntryReq := contentful.FetchEntryRequest{
+			SpaceID:     *spaceID,
+			Environment: *environment,
+			EntryID:     entryID,
+			HeaderName:  *headerName,
+			Scheme:      *scheme,
+			Token:       *token,
+		}
+		entry, entryStatus, err := contentful.FetchEntry(ctx, client, fetchEntryReq)
 		if err != nil {
 			warnf("row %d: fetch entry %s -> status %d: %v", rowNum, entryID, entryStatus, err)
 			_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("fetch entry: %v", err)})
 			continue
 		}
 
-		asset, fetchStatus, err := contentful.FetchAsset(ctx, client, *spaceID, *environment, assetID, *headerName, *scheme, *token)
+		fetchAssetReq := contentful.FetchAssetRequest{
+			SpaceID:     *spaceID,
+			Environment: *environment,
+			AssetID:     assetID,
+			HeaderName:  *headerName,
+			Scheme:      *scheme,
+			Token:       *token,
+		}
+		asset, fetchStatus, err := contentful.FetchAsset(ctx, client, fetchAssetReq)
 		if err != nil {
 			warnf("row %d: fetch asset %s -> status %d: %v", rowNum, assetID, fetchStatus, err)
 			_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("fetch asset: %v", err)})
@@ -120,7 +136,11 @@ func main() {
 		// Download the asset file via contentful module
 		var savedPath string
 		if strings.TrimSpace(asset.FileURL) != "" {
-			if p, _, derr := contentful.DownloadAssetFile(ctx, client, asset, "downloaded"); derr != nil {
+			downloadReq := contentful.DownloadAssetRequest{
+				Asset:   asset,
+				DestDir: "downloaded",
+			}
+			if p, _, derr := contentful.DownloadAssetFile(ctx, client, downloadReq); derr != nil {
 				warnf("row %d: download asset file: %v", rowNum, derr)
 				_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("download file: %v", derr)})
 				continue
@@ -135,9 +155,17 @@ func main() {
 		// Create a new asset from the downloaded file BEFORE unpublishing the old asset
 		var newAssetID string
 		if savedPath != "" {
-			if nid, _, cerr := contentful.CreateAndPublishAssetFromFile(
-				ctx, client, *spaceID, *environment, "en-US", savedPath, asset.FileName, asset.ContentType, asset.Title, asset.Description, *headerName, *scheme, *token,
-			); cerr != nil {
+			createReq := contentful.CreateAssetRequest{
+				Asset:       asset,
+				SpaceID:     *spaceID,
+				Environment: *environment,
+				Locale:      "en-US",
+				FilePath:    savedPath,
+				HeaderName:  *headerName,
+				Scheme:      *scheme,
+				Token:       *token,
+			}
+			if nid, _, cerr := contentful.CreateAndPublishAssetFromFile(ctx, client, createReq); cerr != nil {
 				warnf("row %d: create new asset from file: %v", rowNum, cerr)
 				_ = failedW.Write([]string{entryID, assetID, nid, fmt.Sprintf("create new asset: %v", cerr)})
 				continue
@@ -150,7 +178,16 @@ func main() {
 		}
 
 		// Unpublish the old asset first
-		unpublishStatus, err := contentful.UnpublishAsset(ctx, client, *spaceID, *environment, assetID, asset.Version, *headerName, *scheme, *token)
+		unpublishReq := contentful.UnpublishAssetRequest{
+			SpaceID:     *spaceID,
+			Environment: *environment,
+			AssetID:     assetID,
+			Version:     asset.Version,
+			HeaderName:  *headerName,
+			Scheme:      *scheme,
+			Token:       *token,
+		}
+		unpublishStatus, err := contentful.UnpublishAsset(ctx, client, unpublishReq)
 		if err != nil {
 			warnf("row %d: unpublish asset %s -> status %d: %v", rowNum, assetID, unpublishStatus, err)
 			_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("unpublish old asset: %v", err)})
@@ -158,7 +195,16 @@ func main() {
 		}
 
 		// Then archive the old asset
-		archiveStatus, err := contentful.ArchiveAsset(ctx, client, *spaceID, *environment, assetID, asset.Version, *headerName, *scheme, *token)
+		archiveReq := contentful.ArchiveAssetRequest{
+			SpaceID:     *spaceID,
+			Environment: *environment,
+			AssetID:     assetID,
+			Version:     asset.Version,
+			HeaderName:  *headerName,
+			Scheme:      *scheme,
+			Token:       *token,
+		}
+		archiveStatus, err := contentful.ArchiveAsset(ctx, client, archiveReq)
 		if err != nil {
 			warnf("row %d: archive asset %s -> status %d: %v", rowNum, assetID, archiveStatus, err)
 			_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("archive old asset: %v", err)})
@@ -167,15 +213,34 @@ func main() {
 
 		// Patch the entry to point to the new asset, then publish
 		if newAssetID != "" {
-			newVersion, updStatus, uerr := contentful.PatchEntryAssetLink(
-				ctx, client, *spaceID, *environment, entryID, "downloadableFile", "en-US", newAssetID, entry.Version, *headerName, *scheme, *token,
-			)
+			patchReq := contentful.PatchEntryAssetLinkRequest{
+				SpaceID:     *spaceID,
+				Environment: *environment,
+				EntryID:     entryID,
+				FieldKey:    "downloadableFile",
+				Locale:      "en-US",
+				NewAssetID:  newAssetID,
+				Version:     entry.Version,
+				HeaderName:  *headerName,
+				Scheme:      *scheme,
+				Token:       *token,
+			}
+			newVersion, updStatus, uerr := contentful.PatchEntryAssetLink(ctx, client, patchReq)
 			if uerr != nil {
 				warnf("row %d: patch entry %s -> status %d: %v", rowNum, entryID, updStatus, uerr)
 				_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("patch entry: %v", uerr)})
 				continue
 			}
-			if pubStatus, perr := contentful.PublishEntry(ctx, client, *spaceID, *environment, entryID, newVersion, *headerName, *scheme, *token); perr != nil {
+			publishReq := contentful.PublishEntryRequest{
+				SpaceID:     *spaceID,
+				Environment: *environment,
+				EntryID:     entryID,
+				Version:     newVersion,
+				HeaderName:  *headerName,
+				Scheme:      *scheme,
+				Token:       *token,
+			}
+			if pubStatus, perr := contentful.PublishEntry(ctx, client, publishReq); perr != nil {
 				warnf("row %d: publish entry %s -> status %d: %v", rowNum, entryID, pubStatus, perr)
 				_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("publish entry: %v", perr)})
 				continue

@@ -92,19 +92,77 @@ type Asset struct {
 	Description string
 }
 
+// CreateAssetRequest contains all the parameters needed to create a new asset
+type CreateAssetRequest struct {
+	Asset       Asset
+	SpaceID     string
+	Environment string
+	Locale      string
+	FilePath    string
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
+// FetchAssetRequest contains all the parameters needed to fetch an asset
+type FetchAssetRequest struct {
+	SpaceID     string
+	Environment string
+	AssetID     string
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
+// ArchiveAssetRequest contains all the parameters needed to archive an asset
+type ArchiveAssetRequest struct {
+	SpaceID     string
+	Environment string
+	AssetID     string
+	Version     int
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
+// UnpublishAssetRequest contains all the parameters needed to unpublish an asset
+type UnpublishAssetRequest struct {
+	SpaceID     string
+	Environment string
+	AssetID     string
+	Version     int
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
+// DownloadAssetRequest contains all the parameters needed to download an asset
+type DownloadAssetRequest struct {
+	Asset   Asset
+	DestDir string
+}
+
 // FetchAsset retrieves an asset from Contentful API
-func FetchAsset(ctx context.Context, client *http.Client, spaceID, environment, assetID string, headerName string, scheme string, token string) (Asset, int, error) {
+func FetchAsset(ctx context.Context, client *http.Client, req FetchAssetRequest) (Asset, int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	assetID := req.AssetID
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	// Build the asset URL
 	url := fmt.Sprintf("https://api.contentful.com/spaces/%s/environments/%s/assets/%s", spaceID, environment, assetID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ensureHTTPS(url), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, ensureHTTPS(url), nil)
 	if err != nil {
 		return Asset{}, 0, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return Asset{}, 0, err
 	}
@@ -153,7 +211,20 @@ func FetchAsset(ctx context.Context, client *http.Client, spaceID, environment, 
 }
 
 // CreateAndPublishAssetFromFile uploads a binary file and creates a new Asset referencing it, setting title and description. Returns new asset ID.
-func CreateAndPublishAssetFromFile(ctx context.Context, client *http.Client, spaceID, environment, locale, filePath, fileName, contentType, title, description, headerName, scheme, token string) (string, int, error) {
+func CreateAndPublishAssetFromFile(ctx context.Context, client *http.Client, req CreateAssetRequest) (string, int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	locale := req.Locale
+	filePath := req.FilePath
+	fileName := req.Asset.FileName
+	contentType := req.Asset.ContentType
+	title := req.Asset.Title
+	description := req.Asset.Description
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	if strings.TrimSpace(fileName) == "" {
 		fileName = filepath.Base(strings.TrimSpace(filePath))
 	}
@@ -335,7 +406,16 @@ func CreateAndPublishAssetFromFile(ctx context.Context, client *http.Client, spa
 }
 
 // ArchiveAsset archives an asset using Contentful Management API
-func ArchiveAsset(ctx context.Context, client *http.Client, spaceID, environment, assetID string, version int, headerName string, scheme string, token string) (int, error) {
+func ArchiveAsset(ctx context.Context, client *http.Client, req ArchiveAssetRequest) (int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	assetID := req.AssetID
+	version := req.Version
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	// Build the archive URL
 	archiveURL := fmt.Sprintf("https://api.contentful.com/spaces/%s/environments/%s/assets/%s/archived?version=%d",
 		spaceID, environment, assetID, version)
@@ -393,16 +473,16 @@ func ArchiveAsset(ctx context.Context, client *http.Client, spaceID, environment
 		return 0, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, archiveURL, bytes.NewBuffer(jsonData))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, archiveURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return 0, err
 	}
 
-	req.Header.Set("Content-Type", "application/vnd.contentful.management.v1+json")
-	req.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
-	req.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
+	httpReq.Header.Set("Content-Type", "application/vnd.contentful.management.v1+json")
+	httpReq.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
+	httpReq.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return 0, err
 	}
@@ -418,21 +498,30 @@ func ArchiveAsset(ctx context.Context, client *http.Client, spaceID, environment
 }
 
 // UnpublishAsset unpublishes an asset using Contentful Management API
-func UnpublishAsset(ctx context.Context, client *http.Client, spaceID, environment, assetID string, version int, headerName string, scheme string, token string) (int, error) {
+func UnpublishAsset(ctx context.Context, client *http.Client, req UnpublishAssetRequest) (int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	assetID := req.AssetID
+	version := req.Version
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	// Build the unpublish URL
 	unpublishURL := fmt.Sprintf("https://api.contentful.com/spaces/%s/environments/%s/assets/%s/published",
 		spaceID, environment, assetID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, unpublishURL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, unpublishURL, nil)
 	if err != nil {
 		return 0, err
 	}
 
-	req.Header.Set("Accept", "application/vnd.contentful.management.v1+json")
-	req.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
-	req.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
+	httpReq.Header.Set("Accept", "application/vnd.contentful.management.v1+json")
+	httpReq.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
+	httpReq.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return 0, err
 	}
@@ -515,7 +604,11 @@ func removeTimestampFromFilename(filename string) string {
 // DownloadAssetFile downloads the asset's file to destDir and returns the saved path.
 // It derives filename from Asset.FileName, falling back to the URL basename or Asset.ID.
 // A timestamp is added to the filename to prevent duplicates.
-func DownloadAssetFile(ctx context.Context, client *http.Client, asset Asset, destDir string) (string, int, error) {
+func DownloadAssetFile(ctx context.Context, client *http.Client, req DownloadAssetRequest) (string, int, error) {
+	// Extract values from the request struct
+	asset := req.Asset
+	destDir := req.DestDir
+
 	if strings.TrimSpace(asset.FileURL) == "" {
 		return "", 0, fmt.Errorf("empty asset file URL")
 	}
@@ -545,12 +638,12 @@ func DownloadAssetFile(ctx context.Context, client *http.Client, asset Asset, de
 
 	destPath := filepath.Join(destDir, fileNameWithTimestamp)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ensureHTTPS(asset.FileURL), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, ensureHTTPS(asset.FileURL), nil)
 	if err != nil {
 		return "", 0, err
 	}
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return "", 0, err
 	}

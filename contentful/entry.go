@@ -84,18 +84,75 @@ type Entry struct {
 	FieldStatus   map[string]map[string]string
 }
 
+// FetchEntryRequest contains all the parameters needed to fetch an entry
+type FetchEntryRequest struct {
+	SpaceID     string
+	Environment string
+	EntryID     string
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
+// UpdateEntryAssetLinkRequest contains all the parameters needed to update an entry's asset link
+type UpdateEntryAssetLinkRequest struct {
+	SpaceID     string
+	Environment string
+	EntryID     string
+	FieldKey    string
+	Locale      string
+	NewAssetID  string
+	Version     int
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
+// PublishEntryRequest contains all the parameters needed to publish an entry
+type PublishEntryRequest struct {
+	SpaceID     string
+	Environment string
+	EntryID     string
+	Version     int
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
+// PatchEntryAssetLinkRequest contains all the parameters needed to patch an entry's asset link
+type PatchEntryAssetLinkRequest struct {
+	SpaceID     string
+	Environment string
+	EntryID     string
+	FieldKey    string
+	Locale      string
+	NewAssetID  string
+	Version     int
+	HeaderName  string
+	Scheme      string
+	Token       string
+}
+
 // FetchEntry retrieves a single Entry by ID using CMA
-func FetchEntry(ctx context.Context, client *http.Client, spaceID, environment, entryID string, headerName string, scheme string, token string) (Entry, int, error) {
+func FetchEntry(ctx context.Context, client *http.Client, req FetchEntryRequest) (Entry, int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	entryID := req.EntryID
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	url := fmt.Sprintf("https://api.contentful.com/spaces/%s/environments/%s/entries/%s", spaceID, environment, entryID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return Entry{}, 0, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return Entry{}, 0, err
 	}
@@ -144,7 +201,19 @@ func FetchEntry(ctx context.Context, client *http.Client, spaceID, environment, 
 }
 
 // UpdateEntryAssetLink sets a single asset link field on the entry (e.g. downloadableFile)
-func UpdateEntryAssetLink(ctx context.Context, client *http.Client, spaceID, environment, entryID, fieldKey, locale, newAssetID string, version int, headerName, scheme, token string) (int, int, error) {
+func UpdateEntryAssetLink(ctx context.Context, client *http.Client, req UpdateEntryAssetLinkRequest) (int, int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	entryID := req.EntryID
+	fieldKey := req.FieldKey
+	locale := req.Locale
+	newAssetID := req.NewAssetID
+	version := req.Version
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	if locale == "" {
 		locale = "en-US"
 	}
@@ -162,14 +231,14 @@ func UpdateEntryAssetLink(ctx context.Context, client *http.Client, spaceID, env
 	if err != nil {
 		return 0, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(string(body)))
 	if err != nil {
 		return 0, 0, err
 	}
-	req.Header.Set("Content-Type", "application/vnd.contentful.management.v1+json")
-	req.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
-	req.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
-	resp, err := client.Do(req)
+	httpReq.Header.Set("Content-Type", "application/vnd.contentful.management.v1+json")
+	httpReq.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
+	httpReq.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -187,16 +256,25 @@ func UpdateEntryAssetLink(ctx context.Context, client *http.Client, spaceID, env
 }
 
 // PublishEntry publishes an entry with the supplied version
-func PublishEntry(ctx context.Context, client *http.Client, spaceID, environment, entryID string, version int, headerName, scheme, token string) (int, error) {
+func PublishEntry(ctx context.Context, client *http.Client, req PublishEntryRequest) (int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	entryID := req.EntryID
+	version := req.Version
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	url := fmt.Sprintf("https://api.contentful.com/spaces/%s/environments/%s/entries/%s/published", spaceID, environment, entryID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, url, nil)
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("Accept", "application/vnd.contentful.management.v1+json")
-	req.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
-	req.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
-	resp, err := client.Do(req)
+	httpReq.Header.Set("Accept", "application/vnd.contentful.management.v1+json")
+	httpReq.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
+	httpReq.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return 0, err
 	}
@@ -209,7 +287,19 @@ func PublishEntry(ctx context.Context, client *http.Client, spaceID, environment
 }
 
 // PatchEntryAssetLink applies a JSON Patch to set fields.{fieldKey}.{locale} to a new Asset link
-func PatchEntryAssetLink(ctx context.Context, client *http.Client, spaceID, environment, entryID, fieldKey, locale, newAssetID string, version int, headerName, scheme, token string) (int, int, error) {
+func PatchEntryAssetLink(ctx context.Context, client *http.Client, req PatchEntryAssetLinkRequest) (int, int, error) {
+	// Extract values from the request struct
+	spaceID := req.SpaceID
+	environment := req.Environment
+	entryID := req.EntryID
+	fieldKey := req.FieldKey
+	locale := req.Locale
+	newAssetID := req.NewAssetID
+	version := req.Version
+	headerName := req.HeaderName
+	scheme := req.Scheme
+	token := req.Token
+
 	if locale == "" {
 		locale = "en-US"
 	}
@@ -231,14 +321,14 @@ func PatchEntryAssetLink(ctx context.Context, client *http.Client, spaceID, envi
 	if err != nil {
 		return 0, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, strings.NewReader(string(body)))
 	if err != nil {
 		return 0, 0, err
 	}
-	req.Header.Set("Content-Type", "application/json-patch+json")
-	req.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
-	req.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
-	resp, err := client.Do(req)
+	httpReq.Header.Set("Content-Type", "application/json-patch+json")
+	httpReq.Header.Set("X-Contentful-Version", fmt.Sprintf("%d", version))
+	httpReq.Header.Set(headerName, strings.TrimSpace(scheme+" "+token))
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return 0, 0, err
 	}
