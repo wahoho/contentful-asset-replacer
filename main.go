@@ -1,7 +1,7 @@
 package main
 
 import (
-	"contentful-assets-list/contentful"
+	"contentful-asset-replacer/contentful"
 	"context"
 	"encoding/csv"
 	"errors"

@@ -157,6 +157,10 @@ func CreateAndPublishAssetFromFile(ctx context.Context, client *http.Client, spa
 	if strings.TrimSpace(fileName) == "" {
 		fileName = filepath.Base(strings.TrimSpace(filePath))
 	}
+
+	// Remove timestamp from filename if it was added during download
+	fileName = removeTimestampFromFilename(fileName)
+
 	if strings.TrimSpace(locale) == "" {
 		locale = "en-US"
 	}
@@ -455,8 +459,62 @@ func ensureHTTPS(u string) string {
 	return s
 }
 
+// RemoveTimestampFromFilename removes timestamp from filename that was added during download
+// Expected format: filename_YYYYMMDD_HHMMSS.ext -> filename.ext
+func removeTimestampFromFilename(filename string) string {
+	ext := filepath.Ext(filename)
+	nameWithoutExt := strings.TrimSuffix(filename, ext)
+
+	// Check if filename ends with timestamp pattern _YYYYMMDD_HHMMSS
+	// Pattern: _ followed by 8 digits, underscore, 6 digits
+	if len(nameWithoutExt) > 16 { // minimum length for timestamp pattern
+		// Look for the pattern _YYYYMMDD_HHMMSS at the end
+		// We need to find the second-to-last underscore to get the full timestamp
+		underscores := make([]int, 0)
+		for i, char := range nameWithoutExt {
+			if char == '_' {
+				underscores = append(underscores, i)
+			}
+		}
+
+		// Need at least 2 underscores for the timestamp pattern
+		if len(underscores) >= 2 {
+			// Get the second-to-last underscore position
+			secondLastUnderscore := underscores[len(underscores)-2]
+			timestampPart := nameWithoutExt[secondLastUnderscore+1:]
+
+			// Check if it matches YYYYMMDD_HHMMSS pattern (15 characters: 8_6)
+			if len(timestampPart) == 15 && strings.Count(timestampPart, "_") == 1 {
+				parts := strings.Split(timestampPart, "_")
+				if len(parts) == 2 && len(parts[0]) == 8 && len(parts[1]) == 6 {
+					// Verify they are all digits
+					isValidTimestamp := true
+					for _, part := range parts {
+						for _, char := range part {
+							if char < '0' || char > '9' {
+								isValidTimestamp = false
+								break
+							}
+						}
+						if !isValidTimestamp {
+							break
+						}
+					}
+					if isValidTimestamp {
+						// Remove the timestamp part
+						return nameWithoutExt[:secondLastUnderscore] + ext
+					}
+				}
+			}
+		}
+	}
+
+	return filename
+}
+
 // DownloadAssetFile downloads the asset's file to destDir and returns the saved path.
 // It derives filename from Asset.FileName, falling back to the URL basename or Asset.ID.
+// A timestamp is added to the filename to prevent duplicates.
 func DownloadAssetFile(ctx context.Context, client *http.Client, asset Asset, destDir string) (string, int, error) {
 	if strings.TrimSpace(asset.FileURL) == "" {
 		return "", 0, fmt.Errorf("empty asset file URL")
@@ -479,7 +537,13 @@ func DownloadAssetFile(ctx context.Context, client *http.Client, asset Asset, de
 		}
 	}
 
-	destPath := filepath.Join(destDir, fileName)
+	// Add timestamp to filename to prevent duplicates
+	timestamp := time.Now().Format("20060102_150405")
+	ext := filepath.Ext(fileName)
+	nameWithoutExt := strings.TrimSuffix(fileName, ext)
+	fileNameWithTimestamp := fmt.Sprintf("%s_%s%s", nameWithoutExt, timestamp, ext)
+
+	destPath := filepath.Join(destDir, fileNameWithTimestamp)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ensureHTTPS(asset.FileURL), nil)
 	if err != nil {
