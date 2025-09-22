@@ -1,0 +1,78 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific files
+# Downloaded asset files (these are temporary and should not be committed)
+downloaded/
+*.pdf
+*.docx
+*.doc
+*.xlsx
+*.xls
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.mp4
+*.mp3
+*.zip
+*.tar
+*.gz
+
+# Input CSV files (these contain input data and should not be committed)
+id.csv
+
+# Output CSV files (these contain processed data and should not be committed)
+success.csv
+failed.csv
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build output
+build/
+dist/
