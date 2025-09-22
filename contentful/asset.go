@@ -90,18 +90,20 @@ type Asset struct {
 	ContentType string
 	Title       string
 	Description string
+	CreatedAt   time.Time
 }
 
 // CreateAssetRequest contains all the parameters needed to create a new asset
 type CreateAssetRequest struct {
-	Asset       Asset
-	SpaceID     string
-	Environment string
-	Locale      string
-	FilePath    string
-	HeaderName  string
-	Scheme      string
-	Token       string
+	Asset             Asset
+	SpaceID           string
+	Environment       string
+	Locale            string
+	FilePath          string
+	HeaderName        string
+	Scheme            string
+	Token             string
+	OriginalCreatedAt time.Time // Original asset creation timestamp
 }
 
 // FetchAssetRequest contains all the parameters needed to fetch an asset
@@ -207,6 +209,7 @@ func FetchAsset(ctx context.Context, client *http.Client, req FetchAssetRequest)
 		ContentType: contentType,
 		Title:       title,
 		Description: description,
+		CreatedAt:   asset.Sys.CreatedAt,
 	}, status, nil
 }
 
@@ -224,13 +227,14 @@ func CreateAndPublishAssetFromFile(ctx context.Context, client *http.Client, req
 	headerName := req.HeaderName
 	scheme := req.Scheme
 	token := req.Token
+	originalCreatedAt := req.OriginalCreatedAt.Format("20060102_150405")
 
 	if strings.TrimSpace(fileName) == "" {
 		fileName = filepath.Base(strings.TrimSpace(filePath))
 	}
 
 	// Remove timestamp from filename if it was added during download
-	fileName = removeTimestampFromFilename(fileName)
+	fileName = removeTimestampFromFilename(fileName, originalCreatedAt)
 
 	if strings.TrimSpace(locale) == "" {
 		locale = "en-US"
@@ -548,54 +552,26 @@ func ensureHTTPS(u string) string {
 	return s
 }
 
-// RemoveTimestampFromFilename removes timestamp from filename that was added during download
+// removeTimestampFromFilename removes timestamp from filename that was added during download
 // Expected format: filename_YYYYMMDD_HHMMSS.ext -> filename.ext
-func removeTimestampFromFilename(filename string) string {
-	ext := filepath.Ext(filename)
-	nameWithoutExt := strings.TrimSuffix(filename, ext)
+func removeTimestampFromFilename(filename string, originalCreatedAt string) string {
+	// If originalCreatedAt is empty, return the filename as-is
+	if originalCreatedAt == "" {
+		return filename
+	}
 
-	// Check if filename ends with timestamp pattern _YYYYMMDD_HHMMSS
-	// Pattern: _ followed by 8 digits, underscore, 6 digits
-	if len(nameWithoutExt) > 16 { // minimum length for timestamp pattern
-		// Look for the pattern _YYYYMMDD_HHMMSS at the end
-		// We need to find the second-to-last underscore to get the full timestamp
-		underscores := make([]int, 0)
-		for i, char := range nameWithoutExt {
-			if char == '_' {
-				underscores = append(underscores, i)
-			}
-		}
+	// Look for the timestamp pattern: _YYYYMMDD_HHMMSS
+	timestampPattern := "_" + originalCreatedAt
 
-		// Need at least 2 underscores for the timestamp pattern
-		if len(underscores) >= 2 {
-			// Get the second-to-last underscore position
-			secondLastUnderscore := underscores[len(underscores)-2]
-			timestampPart := nameWithoutExt[secondLastUnderscore+1:]
+	// Check if the filename ends with this timestamp pattern
+	if strings.HasSuffix(filename, timestampPattern) {
+		// Find the position where the timestamp pattern starts
+		ext := filepath.Ext(filename)
+		nameWithoutExt := strings.TrimSuffix(filename, ext)
 
-			// Check if it matches YYYYMMDD_HHMMSS pattern (15 characters: 8_6)
-			if len(timestampPart) == 15 && strings.Count(timestampPart, "_") == 1 {
-				parts := strings.Split(timestampPart, "_")
-				if len(parts) == 2 && len(parts[0]) == 8 && len(parts[1]) == 6 {
-					// Verify they are all digits
-					isValidTimestamp := true
-					for _, part := range parts {
-						for _, char := range part {
-							if char < '0' || char > '9' {
-								isValidTimestamp = false
-								break
-							}
-						}
-						if !isValidTimestamp {
-							break
-						}
-					}
-					if isValidTimestamp {
-						// Remove the timestamp part
-						return nameWithoutExt[:secondLastUnderscore] + ext
-					}
-				}
-			}
-		}
+		// Remove the timestamp pattern and add back the extension
+		cleanName := strings.TrimSuffix(nameWithoutExt, timestampPattern)
+		return cleanName + ext
 	}
 
 	return filename
@@ -630,8 +606,8 @@ func DownloadAssetFile(ctx context.Context, client *http.Client, req DownloadAss
 		}
 	}
 
-	// Add timestamp to filename to prevent duplicates
-	timestamp := time.Now().Format("20060102_150405")
+	// Add timestamp to filename to prevent duplicates using the asset's creation time
+	timestamp := asset.CreatedAt.Format("20060102_150405")
 	ext := filepath.Ext(fileName)
 	nameWithoutExt := strings.TrimSuffix(fileName, ext)
 	fileNameWithTimestamp := fmt.Sprintf("%s_%s%s", nameWithoutExt, timestamp, ext)
