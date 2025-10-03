@@ -67,6 +67,16 @@ type AssetResponse struct {
 		} `json:"publishedBy"`
 		FieldStatus map[string]map[string]string `json:"fieldStatus"`
 		Urn         string                       `json:"urn"`
+		// Optional archived fields - only present when asset is archived
+		ArchivedAt *time.Time `json:"archivedAt,omitempty"`
+		ArchivedBy *struct {
+			Sys struct {
+				Type     string `json:"type"`
+				LinkType string `json:"linkType"`
+				ID       string `json:"id"`
+			} `json:"sys"`
+		} `json:"archivedBy,omitempty"`
+		ArchivedVersion *int `json:"archivedVersion,omitempty"`
 	} `json:"sys"`
 	Fields struct {
 		Title       map[string]string `json:"title"`
