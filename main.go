@@ -246,14 +246,48 @@ func main() {
 				_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("publish entry: %v", perr)})
 				continue
 			}
-			// Success: record entry_id, old asset id, and new asset id
-			_ = successW.Write([]string{entryID, assetID, newAssetID})
+
+			// Validate that the published entry contains the new asset ID
+			if validateAssetReplacement(ctx, client, entryID, newAssetID, *spaceID, *environment, *headerName, *scheme, *token, rowNum, successW, failedW, assetID) {
+				continue
+			}
 		} else {
 			_ = failedW.Write([]string{entryID, assetID, newAssetID, "missing new asset id"})
 			continue
 		}
 	}
 
+}
+
+// validateAssetReplacement validates that the published entry contains the expected new asset ID
+// Returns true if validation failed and processing should continue to next iteration
+func validateAssetReplacement(ctx context.Context, client *http.Client, entryID, newAssetID, spaceID, environment, headerName, scheme, token string, rowNum int, successW, failedW *csv.Writer, oldAssetID string) bool {
+	validateEntryReq := contentful.FetchEntryRequest{
+		SpaceID:     spaceID,
+		Environment: environment,
+		EntryID:     entryID,
+		HeaderName:  headerName,
+		Scheme:      scheme,
+		Token:       token,
+	}
+	validatedEntry, validateStatus, verr := contentful.FetchEntry(ctx, client, validateEntryReq)
+	if verr != nil {
+		warnf("row %d: validate entry %s -> status %d: %v", rowNum, entryID, validateStatus, verr)
+		_ = failedW.Write([]string{entryID, oldAssetID, newAssetID, fmt.Sprintf("validation fetch entry: %v", verr)})
+		return true
+	}
+
+	// Check if the validated entry contains the new asset ID
+	if validatedEntry.AssetID == newAssetID {
+		// Success: record entry_id, old asset id, and new asset id
+		_ = successW.Write([]string{entryID, oldAssetID, newAssetID})
+		return false
+	} else {
+		// Validation failed: the entry doesn't contain the expected new asset ID
+		warnf("row %d: validation failed for entry %s - expected asset %s but found %s", rowNum, entryID, newAssetID, validatedEntry.AssetID)
+		_ = failedW.Write([]string{entryID, oldAssetID, newAssetID, fmt.Sprintf("validation failed: expected asset %s but found %s", newAssetID, validatedEntry.AssetID)})
+		return true
+	}
 }
 
 func fatalf(format string, args ...any) {
