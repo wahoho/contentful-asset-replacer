@@ -15,13 +15,14 @@ import (
 )
 
 func main() {
-	csvPath := flag.String("csv", "id.csv", "Path to CSV file containing only an 'id' column (first column)")
+	csvPath := flag.String("csv", "id.csv", "Path to CSV file containing entry_id column (asset_id will be retrieved from entry's downloadableFile)")
 	token := flag.String("token", os.Getenv("API_TOKEN"), "Bearer token to use for Authorization header (or set API_TOKEN env var)")
 	headerName := flag.String("auth-header", "Authorization", "Authorization header name")
 	scheme := flag.String("scheme", "Bearer", "Authorization scheme prefix, e.g. Bearer")
 	environment := flag.String("environment", "testing_env", "Environment to use for the base URL")
 	spaceID := flag.String("space-id", os.Getenv("SPACE_ID"), "Contentful space ID (or set SPACE_ID env var)")
 	timeout := flag.Duration("timeout", 20*time.Second, "HTTP client timeout")
+	mode := flag.String("mode", "update", "Operation mode: 'update' to replace assets or 'list' to generate entry/asset listing")
 	flag.Parse()
 
 	if strings.TrimSpace(*csvPath) == "" {
@@ -34,6 +35,11 @@ func main() {
 		fatalf("missing -space-id argument or SPACE_ID environment variable")
 	}
 
+	// Validate mode parameter
+	if *mode != "update" && *mode != "list" {
+		fatalf("invalid mode '%s': must be 'update' or 'list'", *mode)
+	}
+
 	file, err := os.Open(*csvPath)
 	if err != nil {
 		fatalf("open csv: %v", err)
@@ -43,31 +49,48 @@ func main() {
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
 
-	// Prepare success and failed CSV outputs (append mode)
-	successF, err := os.OpenFile("success.csv", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		fatalf("open success.csv: %v", err)
-	}
-	defer successF.Close()
-	successW := csv.NewWriter(successF)
-	defer successW.Flush()
+	var successW, failedW *csv.Writer
+	var successF, failedF *os.File
 
-	// Check if success.csv is empty and write header if needed
-	if stat, err := successF.Stat(); err == nil && stat.Size() == 0 {
-		_ = successW.Write([]string{"entry_id", "old_asset_id", "new_asset_id"})
-	}
+	if *mode == "update" {
+		// Prepare success and failed CSV outputs (append mode) for update mode
+		successF, err = os.OpenFile("success.csv", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fatalf("open success.csv: %v", err)
+		}
+		defer successF.Close()
+		successW = csv.NewWriter(successF)
+		defer successW.Flush()
 
-	failedF, err := os.OpenFile("failed.csv", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		fatalf("open failed.csv: %v", err)
-	}
-	defer failedF.Close()
-	failedW := csv.NewWriter(failedF)
-	defer failedW.Flush()
+		// Check if success.csv is empty and write header if needed
+		if stat, err := successF.Stat(); err == nil && stat.Size() == 0 {
+			_ = successW.Write([]string{"entry_id", "old_asset_id", "new_asset_id"})
+		}
 
-	// Check if failed.csv is empty and write header if needed
-	if stat, err := failedF.Stat(); err == nil && stat.Size() == 0 {
-		_ = failedW.Write([]string{"entry_id", "old_asset_id", "new_asset_id", "error"})
+		failedF, err = os.OpenFile("failed.csv", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fatalf("open failed.csv: %v", err)
+		}
+		defer failedF.Close()
+		failedW = csv.NewWriter(failedF)
+		defer failedW.Flush()
+
+		// Check if failed.csv is empty and write header if needed
+		if stat, err := failedF.Stat(); err == nil && stat.Size() == 0 {
+			_ = failedW.Write([]string{"entry_id", "old_asset_id", "new_asset_id", "error"})
+		}
+	} else {
+		// For list mode, create a listing output file
+		listF, err := os.Create("entry_asset_list.csv")
+		if err != nil {
+			fatalf("open entry_asset_list.csv: %v", err)
+		}
+		defer listF.Close()
+		successW = csv.NewWriter(listF)
+		defer successW.Flush()
+
+		// Write header for listing mode
+		_ = successW.Write([]string{"entry_id", "asset_id"})
 	}
 
 	client := &http.Client{Timeout: *timeout}
@@ -90,173 +113,251 @@ func main() {
 			continue
 		}
 		entryID := strings.TrimSpace(record[0])
-		assetID := strings.TrimSpace(record[1])
 
-		if entryID == "" || assetID == "" {
-			warnf("row %d: require entry_id and asset_id", rowNum)
-			continue
-		}
-		if rowNum == 1 && (strings.EqualFold(entryID, "entry_id") || strings.EqualFold(assetID, "asset_id")) {
-			// header row, skip
-			continue
-		}
-
-		// First, fetch the entry and asset to get their information including versions
-
-		fetchEntryReq := contentful.FetchEntryRequest{
-			SpaceID:     *spaceID,
-			Environment: *environment,
-			EntryID:     entryID,
-			HeaderName:  *headerName,
-			Scheme:      *scheme,
-			Token:       *token,
-		}
-		entry, entryStatus, err := contentful.FetchEntry(ctx, client, fetchEntryReq)
-		if err != nil {
-			warnf("row %d: fetch entry %s -> status %d: %v", rowNum, entryID, entryStatus, err)
-			_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("fetch entry: %v", err)})
-			continue
-		}
-
-		fetchAssetReq := contentful.FetchAssetRequest{
-			SpaceID:     *spaceID,
-			Environment: *environment,
-			AssetID:     assetID,
-			HeaderName:  *headerName,
-			Scheme:      *scheme,
-			Token:       *token,
-		}
-		asset, fetchStatus, err := contentful.FetchAsset(ctx, client, fetchAssetReq)
-		if err != nil {
-			warnf("row %d: fetch asset %s -> status %d: %v", rowNum, assetID, fetchStatus, err)
-			_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("fetch asset: %v", err)})
-			continue
-		}
-
-		// Download the asset file via contentful module
-		var savedPath string
-		if strings.TrimSpace(asset.FileURL) != "" {
-			downloadReq := contentful.DownloadAssetRequest{
-				Asset:   asset,
-				DestDir: "downloaded",
-			}
-			if p, _, derr := contentful.DownloadAssetFile(ctx, client, downloadReq); derr != nil {
-				warnf("row %d: download asset file: %v", rowNum, derr)
-				_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("download file: %v", derr)})
+		if *mode == "list" {
+			// List mode: only require entry_id
+			if entryID == "" {
+				warnf("row %d: require entry_id", rowNum)
 				continue
-			} else {
-				savedPath = p
+			}
+			if rowNum == 1 && strings.EqualFold(entryID, "entry_id") {
+				// header row, skip
+				continue
 			}
 		} else {
-			_ = failedW.Write([]string{entryID, assetID, "", "asset has empty file URL"})
-			continue
-		}
-
-		// Create a new asset from the downloaded file BEFORE unpublishing the old asset
-		var newAssetID string
-		if savedPath != "" {
-			createReq := contentful.CreateAssetRequest{
-				Asset:             asset,
-				SpaceID:           *spaceID,
-				Environment:       *environment,
-				Locale:            "en-US",
-				FilePath:          savedPath,
-				HeaderName:        *headerName,
-				Scheme:            *scheme,
-				Token:             *token,
-				OriginalCreatedAt: asset.CreatedAt,
-			}
-			if nid, _, cerr := contentful.CreateAndPublishAssetFromFile(ctx, client, createReq); cerr != nil {
-				warnf("row %d: create new asset from file: %v", rowNum, cerr)
-				_ = failedW.Write([]string{entryID, assetID, nid, fmt.Sprintf("create new asset: %v", cerr)})
+			// Update mode: require both entry_id and asset_id (for backward compatibility)
+			assetID := strings.TrimSpace(record[1])
+			if entryID == "" || assetID == "" {
+				warnf("row %d: require entry_id and asset_id", rowNum)
 				continue
-			} else {
-				newAssetID = nid
 			}
-		} else {
-			_ = failedW.Write([]string{entryID, assetID, "", "no savedPath for new asset"})
-			continue
+			if rowNum == 1 && (strings.EqualFold(entryID, "entry_id") || strings.EqualFold(assetID, "asset_id")) {
+				// header row, skip
+				continue
+			}
 		}
 
-		// Unpublish the old asset first
-		unpublishReq := contentful.UnpublishAssetRequest{
-			SpaceID:     *spaceID,
-			Environment: *environment,
-			AssetID:     assetID,
-			Version:     asset.Version,
-			HeaderName:  *headerName,
-			Scheme:      *scheme,
-			Token:       *token,
-		}
-		unpublishStatus, err := contentful.UnpublishAsset(ctx, client, unpublishReq)
-		if err != nil {
-			warnf("row %d: unpublish asset %s -> status %d: %v", rowNum, assetID, unpublishStatus, err)
-			_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("unpublish old asset: %v", err)})
-			continue
-		}
+		// Declare variables to be used in both modes
+		var entry contentful.Entry
+		var asset contentful.Asset
+		var assetID string
 
-		// Then archive the old asset
-		archiveReq := contentful.ArchiveAssetRequest{
-			SpaceID:     *spaceID,
-			Environment: *environment,
-			AssetID:     assetID,
-			Version:     asset.Version,
-			HeaderName:  *headerName,
-			Scheme:      *scheme,
-			Token:       *token,
-		}
-		archiveStatus, err := contentful.ArchiveAsset(ctx, client, archiveReq)
-		if err != nil {
-			warnf("row %d: archive asset %s -> status %d: %v", rowNum, assetID, archiveStatus, err)
-			_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("archive old asset: %v", err)})
-			continue
-		}
-
-		// Patch the entry to point to the new asset, then publish
-		if newAssetID != "" {
-			patchReq := contentful.PatchEntryAssetLinkRequest{
+		if *mode == "list" {
+			// List mode: fetch entry first, then extract asset_id from downloadableFile field
+			fetchEntryReq := contentful.FetchEntryRequest{
 				SpaceID:     *spaceID,
 				Environment: *environment,
 				EntryID:     entryID,
-				FieldKey:    "downloadableFile",
-				Locale:      "en-US",
-				NewAssetID:  newAssetID,
-				Version:     entry.Version,
 				HeaderName:  *headerName,
 				Scheme:      *scheme,
 				Token:       *token,
 			}
-			newVersion, updStatus, uerr := contentful.PatchEntryAssetLink(ctx, client, patchReq)
-			if uerr != nil {
-				warnf("row %d: patch entry %s -> status %d: %v", rowNum, entryID, updStatus, uerr)
-				_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("patch entry: %v", uerr)})
+			var entryStatus int
+			var err error
+			entry, entryStatus, err = contentful.FetchEntry(ctx, client, fetchEntryReq)
+			if err != nil {
+				warnf("row %d: fetch entry %s -> status %d: %v", rowNum, entryID, entryStatus, err)
 				continue
 			}
-			publishReq := contentful.PublishEntryRequest{
+
+			// Extract asset_id from entry's downloadableFile field
+			assetID = entry.AssetID
+			if assetID == "" {
+				warnf("row %d: entry %s has no downloadableFile asset", rowNum, entryID)
+				continue
+			}
+
+			// Now fetch the asset details
+			fetchAssetReq := contentful.FetchAssetRequest{
 				SpaceID:     *spaceID,
 				Environment: *environment,
-				EntryID:     entryID,
-				Version:     newVersion,
+				AssetID:     assetID,
 				HeaderName:  *headerName,
 				Scheme:      *scheme,
 				Token:       *token,
 			}
-			if pubStatus, perr := contentful.PublishEntry(ctx, client, publishReq); perr != nil {
-				warnf("row %d: publish entry %s -> status %d: %v", rowNum, entryID, pubStatus, perr)
-				_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("publish entry: %v", perr)})
-				continue
-			}
-
-			// Validate that the published entry contains the new asset ID
-			if validateAssetReplacement(ctx, client, entryID, newAssetID, *spaceID, *environment, *headerName, *scheme, *token, rowNum, successW, failedW, assetID) {
+			var fetchStatus int
+			asset, fetchStatus, err = contentful.FetchAsset(ctx, client, fetchAssetReq)
+			if err != nil {
+				warnf("row %d: fetch asset %s -> status %d: %v", rowNum, assetID, fetchStatus, err)
 				continue
 			}
 		} else {
-			_ = failedW.Write([]string{entryID, assetID, newAssetID, "missing new asset id"})
-			continue
+			// Update mode: require both entry_id and asset_id from CSV
+			assetID = strings.TrimSpace(record[1])
+
+			fetchEntryReq := contentful.FetchEntryRequest{
+				SpaceID:     *spaceID,
+				Environment: *environment,
+				EntryID:     entryID,
+				HeaderName:  *headerName,
+				Scheme:      *scheme,
+				Token:       *token,
+			}
+			var entryStatus int
+			var err error
+			entry, entryStatus, err = contentful.FetchEntry(ctx, client, fetchEntryReq)
+			if err != nil {
+				warnf("row %d: fetch entry %s -> status %d: %v", rowNum, entryID, entryStatus, err)
+				_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("fetch entry: %v", err)})
+				continue
+			}
+
+			fetchAssetReq := contentful.FetchAssetRequest{
+				SpaceID:     *spaceID,
+				Environment: *environment,
+				AssetID:     assetID,
+				HeaderName:  *headerName,
+				Scheme:      *scheme,
+				Token:       *token,
+			}
+			var fetchStatus int
+			asset, fetchStatus, err = contentful.FetchAsset(ctx, client, fetchAssetReq)
+			if err != nil {
+				warnf("row %d: fetch asset %s -> status %d: %v", rowNum, assetID, fetchStatus, err)
+				_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("fetch asset: %v", err)})
+				continue
+			}
+		}
+
+		if *mode == "list" {
+			// List mode: just output the information
+			_ = successW.Write([]string{
+				entryID,
+				assetID,
+			})
+		} else {
+			// Update mode: execute the full asset replacement workflow
+			processAssetUpdate(ctx, client, entryID, assetID, entry, asset, *spaceID, *environment, *headerName, *scheme, *token, rowNum, successW, failedW)
 		}
 	}
 
+}
+
+// processAssetUpdate handles the complete asset replacement workflow for update mode
+func processAssetUpdate(ctx context.Context, client *http.Client, entryID, assetID string, entry contentful.Entry, asset contentful.Asset, spaceID, environment, headerName, scheme, token string, rowNum int, successW, failedW *csv.Writer) {
+	// Download the asset file via contentful module
+	var savedPath string
+	if strings.TrimSpace(asset.FileURL) != "" {
+		downloadReq := contentful.DownloadAssetRequest{
+			Asset:   asset,
+			DestDir: "downloaded",
+		}
+		if p, _, derr := contentful.DownloadAssetFile(ctx, client, downloadReq); derr != nil {
+			warnf("row %d: download asset file: %v", rowNum, derr)
+			_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("download file: %v", derr)})
+			return
+		} else {
+			savedPath = p
+		}
+	} else {
+		_ = failedW.Write([]string{entryID, assetID, "", "asset has empty file URL"})
+		return
+	}
+
+	// Create a new asset from the downloaded file BEFORE unpublishing the old asset
+	var newAssetID string
+	if savedPath != "" {
+		createReq := contentful.CreateAssetRequest{
+			Asset:             asset,
+			SpaceID:           spaceID,
+			Environment:       environment,
+			Locale:            "en-US",
+			FilePath:          savedPath,
+			HeaderName:        headerName,
+			Scheme:            scheme,
+			Token:             token,
+			OriginalCreatedAt: asset.CreatedAt,
+		}
+		if nid, _, cerr := contentful.CreateAndPublishAssetFromFile(ctx, client, createReq); cerr != nil {
+			warnf("row %d: create new asset from file: %v", rowNum, cerr)
+			_ = failedW.Write([]string{entryID, assetID, nid, fmt.Sprintf("create new asset: %v", cerr)})
+			return
+		} else {
+			newAssetID = nid
+		}
+	} else {
+		_ = failedW.Write([]string{entryID, assetID, "", "no savedPath for new asset"})
+		return
+	}
+
+	// Unpublish the old asset first
+	unpublishReq := contentful.UnpublishAssetRequest{
+		SpaceID:     spaceID,
+		Environment: environment,
+		AssetID:     assetID,
+		Version:     asset.Version,
+		HeaderName:  headerName,
+		Scheme:      scheme,
+		Token:       token,
+	}
+	unpublishStatus, err := contentful.UnpublishAsset(ctx, client, unpublishReq)
+	if err != nil {
+		warnf("row %d: unpublish asset %s -> status %d: %v", rowNum, assetID, unpublishStatus, err)
+		_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("unpublish old asset: %v", err)})
+		return
+	}
+
+	// Then archive the old asset
+	archiveReq := contentful.ArchiveAssetRequest{
+		SpaceID:     spaceID,
+		Environment: environment,
+		AssetID:     assetID,
+		Version:     asset.Version,
+		HeaderName:  headerName,
+		Scheme:      scheme,
+		Token:       token,
+	}
+	archiveStatus, err := contentful.ArchiveAsset(ctx, client, archiveReq)
+	if err != nil {
+		warnf("row %d: archive asset %s -> status %d: %v", rowNum, assetID, archiveStatus, err)
+		_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("archive old asset: %v", err)})
+		return
+	}
+
+	// Patch the entry to point to the new asset, then publish
+	if newAssetID != "" {
+		patchReq := contentful.PatchEntryAssetLinkRequest{
+			SpaceID:     spaceID,
+			Environment: environment,
+			EntryID:     entryID,
+			FieldKey:    "downloadableFile",
+			Locale:      "en-US",
+			NewAssetID:  newAssetID,
+			Version:     entry.Version,
+			HeaderName:  headerName,
+			Scheme:      scheme,
+			Token:       token,
+		}
+		newVersion, updStatus, uerr := contentful.PatchEntryAssetLink(ctx, client, patchReq)
+		if uerr != nil {
+			warnf("row %d: patch entry %s -> status %d: %v", rowNum, entryID, updStatus, uerr)
+			_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("patch entry: %v", uerr)})
+			return
+		}
+		publishReq := contentful.PublishEntryRequest{
+			SpaceID:     spaceID,
+			Environment: environment,
+			EntryID:     entryID,
+			Version:     newVersion,
+			HeaderName:  headerName,
+			Scheme:      scheme,
+			Token:       token,
+		}
+		if pubStatus, perr := contentful.PublishEntry(ctx, client, publishReq); perr != nil {
+			warnf("row %d: publish entry %s -> status %d: %v", rowNum, entryID, pubStatus, perr)
+			_ = failedW.Write([]string{entryID, assetID, newAssetID, fmt.Sprintf("publish entry: %v", perr)})
+			return
+		}
+
+		// Validate that the published entry contains the new asset ID
+		if validateAssetReplacement(ctx, client, entryID, newAssetID, spaceID, environment, headerName, scheme, token, rowNum, successW, failedW, assetID) {
+			return
+		}
+	} else {
+		_ = failedW.Write([]string{entryID, assetID, newAssetID, "missing new asset id"})
+		return
+	}
 }
 
 // validateAssetReplacement validates that the published entry contains the expected new asset ID
