@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	csvPath := flag.String("csv", "id.csv", "Path to CSV file containing entry_id column (asset_id will be retrieved from entry's downloadableFile)")
+	csvPath := flag.String("csv", "id.csv", "Path to CSV file containing entry_id column (asset_id will be retrieved from entry's downloadableFile for update mode)")
 	token := flag.String("token", os.Getenv("API_TOKEN"), "Bearer token to use for Authorization header (or set API_TOKEN env var)")
 	headerName := flag.String("auth-header", "Authorization", "Authorization header name")
 	scheme := flag.String("scheme", "Bearer", "Authorization scheme prefix, e.g. Bearer")
@@ -152,13 +152,12 @@ func main() {
 				continue
 			}
 		} else {
-			// Update mode: require both entry_id and asset_id (for backward compatibility)
-			assetID := strings.TrimSpace(record[1])
-			if entryID == "" || assetID == "" {
-				warnf("row %d: require entry_id and asset_id", rowNum)
+			// Update mode: only require entry_id (asset_id will be fetched from entry)
+			if entryID == "" {
+				warnf("row %d: require entry_id", rowNum)
 				continue
 			}
-			if rowNum == 1 && (strings.EqualFold(entryID, "entry_id") || strings.EqualFold(assetID, "asset_id")) {
+			if rowNum == 1 && strings.EqualFold(entryID, "entry_id") {
 				// header row, skip
 				continue
 			}
@@ -215,9 +214,7 @@ func main() {
 				}
 			}
 		} else {
-			// Update mode: require both entry_id and asset_id from CSV
-			assetID = strings.TrimSpace(record[1])
-
+			// Update mode: fetch entry first, then get asset_id from entry's downloadableFile field
 			fetchEntryReq := contentful.FetchEntryRequest{
 				SpaceID:     *spaceID,
 				Environment: *environment,
@@ -231,7 +228,15 @@ func main() {
 			entry, entryStatus, err = contentful.FetchEntry(ctx, client, fetchEntryReq)
 			if err != nil {
 				warnf("row %d: fetch entry %s -> status %d: %v", rowNum, entryID, entryStatus, err)
-				_ = failedW.Write([]string{entryID, assetID, "", fmt.Sprintf("fetch entry: %v", err)})
+				_ = failedW.Write([]string{entryID, "", "", fmt.Sprintf("fetch entry: %v", err)})
+				continue
+			}
+
+			// Extract asset_id from entry's downloadableFile field
+			assetID = entry.AssetID
+			if assetID == "" {
+				warnf("row %d: entry %s has no downloadableFile asset", rowNum, entryID)
+				_ = failedW.Write([]string{entryID, "", "", "entry has no downloadableFile asset"})
 				continue
 			}
 
