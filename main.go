@@ -19,10 +19,10 @@ func main() {
 	token := flag.String("token", os.Getenv("API_TOKEN"), "Bearer token to use for Authorization header (or set API_TOKEN env var)")
 	headerName := flag.String("auth-header", "Authorization", "Authorization header name")
 	scheme := flag.String("scheme", "Bearer", "Authorization scheme prefix, e.g. Bearer")
-	environment := flag.String("environment", "yap_env", "Environment to use for the base URL")
+	environment := flag.String("environment", "yap_env2", "Environment to use for the base URL")
 	spaceID := flag.String("space-id", os.Getenv("SPACE_ID"), "Contentful space ID (or set SPACE_ID env var)")
 	timeout := flag.Duration("timeout", 20*time.Second, "HTTP client timeout")
-	mode := flag.String("mode", "update", "Operation mode: 'update' to replace assets, 'list' to generate entry/asset listing, or 'publish' to publish entries")
+	mode := flag.String("mode", "update", "Operation mode: 'update' to replace assets, 'list' to generate entry/asset listing, 'publish' to publish entries, or 'archived-list' to check if assets are archived")
 	flag.Parse()
 
 	if strings.TrimSpace(*csvPath) == "" {
@@ -36,8 +36,8 @@ func main() {
 	}
 
 	// Validate mode parameter
-	if *mode != "update" && *mode != "list" && *mode != "publish" {
-		fatalf("invalid mode '%s': must be 'update', 'list', or 'publish'", *mode)
+	if *mode != "update" && *mode != "list" && *mode != "publish" && *mode != "archived-list" {
+		fatalf("invalid mode '%s': must be 'update', 'list', 'publish', or 'archived-list'", *mode)
 	}
 
 	file, err := os.Open(*csvPath)
@@ -106,6 +106,18 @@ func main() {
 		if stat, err := failedF.Stat(); err == nil && stat.Size() == 0 {
 			_ = failedW.Write([]string{"entry_id", "error"})
 		}
+	} else if *mode == "archived-list" {
+		// For archived list mode, create a listing output file
+		archivedF, err := os.Create("archived_asset_list.csv")
+		if err != nil {
+			fatalf("open archived_asset_list.csv: %v", err)
+		}
+		defer archivedF.Close()
+		successW = csv.NewWriter(archivedF)
+		defer successW.Flush()
+
+		// Write header for archived list mode
+		_ = successW.Write([]string{"asset_id", "is_archived", "archived_at", "title", "file_url"})
 	} else {
 		// For list mode, create a listing output file
 		listF, err := os.Create("entry_asset_list.csv")
@@ -148,6 +160,16 @@ func main() {
 				continue
 			}
 			if rowNum == 1 && strings.EqualFold(entryID, "entry_id") {
+				// header row, skip
+				continue
+			}
+		} else if *mode == "archived-list" {
+			// Archived list mode: treat entryID as asset_id
+			if entryID == "" {
+				warnf("row %d: require asset_id", rowNum)
+				continue
+			}
+			if rowNum == 1 && (strings.EqualFold(entryID, "entry_id") || strings.EqualFold(entryID, "asset_id")) {
 				// header row, skip
 				continue
 			}
@@ -213,6 +235,24 @@ func main() {
 					continue
 				}
 			}
+		} else if *mode == "archived-list" {
+			// Archived list mode: treat entryID as asset_id and fetch asset directly
+			assetID = entryID
+			fetchAssetReq := contentful.FetchAssetRequest{
+				SpaceID:     *spaceID,
+				Environment: *environment,
+				AssetID:     assetID,
+				HeaderName:  *headerName,
+				Scheme:      *scheme,
+				Token:       *token,
+			}
+			var fetchStatus int
+			var err error
+			asset, fetchStatus, err = contentful.FetchAsset(ctx, client, fetchAssetReq)
+			if err != nil {
+				warnf("row %d: fetch asset %s -> status %d: %v", rowNum, assetID, fetchStatus, err)
+				continue
+			}
 		} else {
 			// Update mode: fetch entry first, then get asset_id from entry's downloadableFile field
 			fetchEntryReq := contentful.FetchEntryRequest{
@@ -267,6 +307,9 @@ func main() {
 		} else if *mode == "publish" {
 			// Publish mode: publish the entry
 			processPublishEntry(ctx, client, entryID, entry, *spaceID, *environment, *headerName, *scheme, *token, rowNum, successW, failedW)
+		} else if *mode == "archived-list" {
+			// Archived list mode: check if asset is archived
+			processArchivedList(assetID, asset, successW)
 		} else {
 			// Update mode: execute the full asset replacement workflow
 			processAssetUpdate(ctx, client, entryID, assetID, entry, asset, *spaceID, *environment, *headerName, *scheme, *token, rowNum, successW, failedW)
@@ -399,6 +442,33 @@ func processAssetUpdate(ctx context.Context, client *http.Client, entryID, asset
 		_ = failedW.Write([]string{entryID, assetID, newAssetID, "missing new asset id"})
 		return
 	}
+}
+
+// processArchivedList handles checking if assets are archived
+func processArchivedList(assetID string, asset contentful.Asset, successW *csv.Writer) {
+	isArchived := "false"
+	archivedAt := ""
+
+	// Check if the asset has an archivedAt field (indicating it's archived)
+	if asset.ArchivedAt != "" {
+		isArchived = "true"
+		archivedAt = asset.ArchivedAt
+	}
+
+	// Ensure file URL uses HTTPS
+	fileURL := asset.FileURL
+	if fileURL != "" && !strings.HasPrefix(strings.ToLower(fileURL), "https://") {
+		if strings.HasPrefix(strings.ToLower(fileURL), "http://") {
+			fileURL = strings.Replace(fileURL, "http://", "https://", 1)
+		} else if strings.HasPrefix(fileURL, "//") {
+			fileURL = "https:" + fileURL
+		} else {
+			fileURL = "https://" + fileURL
+		}
+	}
+
+	// Write the result to CSV
+	_ = successW.Write([]string{assetID, isArchived, archivedAt, asset.Title, fileURL})
 }
 
 // processPublishEntry handles publishing an entry

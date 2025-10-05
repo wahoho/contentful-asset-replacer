@@ -101,6 +101,7 @@ type Asset struct {
 	Title       string
 	Description string
 	CreatedAt   time.Time
+	ArchivedAt  string
 }
 
 // CreateAssetRequest contains all the parameters needed to create a new asset
@@ -211,6 +212,11 @@ func FetchAsset(ctx context.Context, client *http.Client, req FetchAssetRequest)
 		description = d
 	}
 
+	var archivedAt string
+	if asset.Sys.ArchivedAt != nil {
+		archivedAt = asset.Sys.ArchivedAt.Format(time.RFC3339)
+	}
+
 	return Asset{
 		ID:          asset.Sys.ID,
 		Version:     asset.Sys.Version,
@@ -220,6 +226,7 @@ func FetchAsset(ctx context.Context, client *http.Client, req FetchAssetRequest)
 		Title:       title,
 		Description: description,
 		CreatedAt:   asset.Sys.CreatedAt,
+		ArchivedAt:  archivedAt,
 	}, status, nil
 }
 
