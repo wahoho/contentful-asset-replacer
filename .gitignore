@@ -54,10 +54,15 @@ downloaded/
 
 # Input CSV files (these contain input data and should not be committed)
 id.csv
+asset_ids.csv
 
 # Output CSV files (these contain processed data and should not be committed)
 success.csv
 failed.csv
+archived_asset_list.csv
+entry_asset_list.csv
+publish_success.csv
+publish_failed.csv
 
 # Environment files
 .env
