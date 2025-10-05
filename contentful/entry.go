@@ -197,6 +197,7 @@ func FetchEntry(ctx context.Context, client *http.Client, req FetchEntryRequest)
 		Version:       er.Sys.Version,
 		ContentTypeID: ctID,
 		AssetID:       assetID,
+		FieldStatus:   er.Sys.FieldStatus,
 	}, status, nil
 }
 

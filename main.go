@@ -19,10 +19,10 @@ func main() {
 	token := flag.String("token", os.Getenv("API_TOKEN"), "Bearer token to use for Authorization header (or set API_TOKEN env var)")
 	headerName := flag.String("auth-header", "Authorization", "Authorization header name")
 	scheme := flag.String("scheme", "Bearer", "Authorization scheme prefix, e.g. Bearer")
-	environment := flag.String("environment", "testing_env", "Environment to use for the base URL")
+	environment := flag.String("environment", "yap_env", "Environment to use for the base URL")
 	spaceID := flag.String("space-id", os.Getenv("SPACE_ID"), "Contentful space ID (or set SPACE_ID env var)")
 	timeout := flag.Duration("timeout", 20*time.Second, "HTTP client timeout")
-	mode := flag.String("mode", "update", "Operation mode: 'update' to replace assets or 'list' to generate entry/asset listing")
+	mode := flag.String("mode", "update", "Operation mode: 'update' to replace assets, 'list' to generate entry/asset listing, or 'publish' to publish entries")
 	flag.Parse()
 
 	if strings.TrimSpace(*csvPath) == "" {
@@ -36,8 +36,8 @@ func main() {
 	}
 
 	// Validate mode parameter
-	if *mode != "update" && *mode != "list" {
-		fatalf("invalid mode '%s': must be 'update' or 'list'", *mode)
+	if *mode != "update" && *mode != "list" && *mode != "publish" {
+		fatalf("invalid mode '%s': must be 'update', 'list', or 'publish'", *mode)
 	}
 
 	file, err := os.Open(*csvPath)
@@ -79,6 +79,33 @@ func main() {
 		if stat, err := failedF.Stat(); err == nil && stat.Size() == 0 {
 			_ = failedW.Write([]string{"entry_id", "old_asset_id", "new_asset_id", "error"})
 		}
+	} else if *mode == "publish" {
+		// Prepare success and failed CSV outputs for publish mode
+		successF, err = os.OpenFile("publish_success.csv", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fatalf("open publish_success.csv: %v", err)
+		}
+		defer successF.Close()
+		successW = csv.NewWriter(successF)
+		defer successW.Flush()
+
+		// Check if publish_success.csv is empty and write header if needed
+		if stat, err := successF.Stat(); err == nil && stat.Size() == 0 {
+			_ = successW.Write([]string{"entry_id", "version", "published_version"})
+		}
+
+		failedF, err = os.OpenFile("publish_failed.csv", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fatalf("open publish_failed.csv: %v", err)
+		}
+		defer failedF.Close()
+		failedW = csv.NewWriter(failedF)
+		defer failedW.Flush()
+
+		// Check if publish_failed.csv is empty and write header if needed
+		if stat, err := failedF.Stat(); err == nil && stat.Size() == 0 {
+			_ = failedW.Write([]string{"entry_id", "error"})
+		}
 	} else {
 		// For list mode, create a listing output file
 		listF, err := os.Create("entry_asset_list.csv")
@@ -90,7 +117,7 @@ func main() {
 		defer successW.Flush()
 
 		// Write header for listing mode
-		_ = successW.Write([]string{"entry_id", "asset_id"})
+		_ = successW.Write([]string{"entry_id", "entry_status", "asset_id"})
 	}
 
 	client := &http.Client{Timeout: *timeout}
@@ -114,8 +141,8 @@ func main() {
 		}
 		entryID := strings.TrimSpace(record[0])
 
-		if *mode == "list" {
-			// List mode: only require entry_id
+		if *mode == "list" || *mode == "publish" {
+			// List mode and publish mode: only require entry_id
 			if entryID == "" {
 				warnf("row %d: require entry_id", rowNum)
 				continue
@@ -142,8 +169,8 @@ func main() {
 		var asset contentful.Asset
 		var assetID string
 
-		if *mode == "list" {
-			// List mode: fetch entry first, then extract asset_id from downloadableFile field
+		if *mode == "list" || *mode == "publish" {
+			// List mode and publish mode: fetch entry first
 			fetchEntryReq := contentful.FetchEntryRequest{
 				SpaceID:     *spaceID,
 				Environment: *environment,
@@ -157,30 +184,35 @@ func main() {
 			entry, entryStatus, err = contentful.FetchEntry(ctx, client, fetchEntryReq)
 			if err != nil {
 				warnf("row %d: fetch entry %s -> status %d: %v", rowNum, entryID, entryStatus, err)
+				if *mode == "publish" {
+					_ = failedW.Write([]string{entryID, fmt.Sprintf("fetch entry: %v", err)})
+				}
 				continue
 			}
 
-			// Extract asset_id from entry's downloadableFile field
-			assetID = entry.AssetID
-			if assetID == "" {
-				warnf("row %d: entry %s has no downloadableFile asset", rowNum, entryID)
-				continue
-			}
+			// For list mode: extract asset_id from entry's downloadableFile field and fetch asset
+			if *mode == "list" {
+				assetID = entry.AssetID
+				if assetID == "" {
+					warnf("row %d: entry %s has no downloadableFile asset", rowNum, entryID)
+					continue
+				}
 
-			// Now fetch the asset details
-			fetchAssetReq := contentful.FetchAssetRequest{
-				SpaceID:     *spaceID,
-				Environment: *environment,
-				AssetID:     assetID,
-				HeaderName:  *headerName,
-				Scheme:      *scheme,
-				Token:       *token,
-			}
-			var fetchStatus int
-			asset, fetchStatus, err = contentful.FetchAsset(ctx, client, fetchAssetReq)
-			if err != nil {
-				warnf("row %d: fetch asset %s -> status %d: %v", rowNum, assetID, fetchStatus, err)
-				continue
+				// Now fetch the asset details
+				fetchAssetReq := contentful.FetchAssetRequest{
+					SpaceID:     *spaceID,
+					Environment: *environment,
+					AssetID:     assetID,
+					HeaderName:  *headerName,
+					Scheme:      *scheme,
+					Token:       *token,
+				}
+				var fetchStatus int
+				asset, fetchStatus, err = contentful.FetchAsset(ctx, client, fetchAssetReq)
+				if err != nil {
+					warnf("row %d: fetch asset %s -> status %d: %v", rowNum, assetID, fetchStatus, err)
+					continue
+				}
 			}
 		} else {
 			// Update mode: require both entry_id and asset_id from CSV
@@ -224,8 +256,12 @@ func main() {
 			// List mode: just output the information
 			_ = successW.Write([]string{
 				entryID,
+				entry.FieldStatus["*"]["en-US"],
 				assetID,
 			})
+		} else if *mode == "publish" {
+			// Publish mode: publish the entry
+			processPublishEntry(ctx, client, entryID, entry, *spaceID, *environment, *headerName, *scheme, *token, rowNum, successW, failedW)
 		} else {
 			// Update mode: execute the full asset replacement workflow
 			processAssetUpdate(ctx, client, entryID, assetID, entry, asset, *spaceID, *environment, *headerName, *scheme, *token, rowNum, successW, failedW)
@@ -358,6 +394,27 @@ func processAssetUpdate(ctx context.Context, client *http.Client, entryID, asset
 		_ = failedW.Write([]string{entryID, assetID, newAssetID, "missing new asset id"})
 		return
 	}
+}
+
+// processPublishEntry handles publishing an entry
+func processPublishEntry(ctx context.Context, client *http.Client, entryID string, entry contentful.Entry, spaceID, environment, headerName, scheme, token string, rowNum int, successW, failedW *csv.Writer) {
+	publishReq := contentful.PublishEntryRequest{
+		SpaceID:     spaceID,
+		Environment: environment,
+		EntryID:     entryID,
+		Version:     entry.Version,
+		HeaderName:  headerName,
+		Scheme:      scheme,
+		Token:       token,
+	}
+	if pubStatus, perr := contentful.PublishEntry(ctx, client, publishReq); perr != nil {
+		warnf("row %d: publish entry %s -> status %d: %v", rowNum, entryID, pubStatus, perr)
+		_ = failedW.Write([]string{entryID, fmt.Sprintf("publish entry: %v", perr)})
+		return
+	}
+
+	// Success: record entry_id, version, and published_version
+	_ = successW.Write([]string{entryID, fmt.Sprintf("%d", entry.Version), fmt.Sprintf("%d", entry.Version+1)})
 }
 
 // validateAssetReplacement validates that the published entry contains the expected new asset ID
